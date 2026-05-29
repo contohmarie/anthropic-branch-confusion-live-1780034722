@@ -31,7 +31,7 @@ jobs:
           git config user.email "branch-confusion-validation@example.invalid"
 
           gh pr view "$PR_NUMBER" \
-            --json url,headRefName,headRefOid,headRepository,headRepositoryOwner,baseRefName,baseRepository,isCrossRepository \
+            --json url,headRefName,headRefOid,headRepository,headRepositoryOwner,baseRefName,isCrossRepository \
             > pr.json
 
           PR_URL="$(jq -r '.url' pr.json)"
@@ -40,7 +40,7 @@ jobs:
           PR_IS_CROSS_REPOSITORY="$(jq -r '.isCrossRepository' pr.json)"
           PR_HEAD_REPO="$(jq -r '.headRepository.nameWithOwner' pr.json)"
           PR_HEAD_OWNER="$(jq -r '.headRepositoryOwner.login' pr.json)"
-          PR_BASE_REPO="$(jq -r '.baseRepository.nameWithOwner' pr.json)"
+          PR_BASE_REPO="${GITHUB_REPOSITORY}"
           PR_BASE_REF="$(jq -r '.baseRefName' pr.json)"
           ORIGIN_REMOTE_URL="$(git remote get-url origin)"
 
